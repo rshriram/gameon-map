@@ -6,11 +6,14 @@
         <feature>jaxrs-2.0</feature>
         <feature>cdi-1.2</feature>
         <feature>ssl-1.0</feature>
+        <feature>apiDiscovery-1.0</feature>
     </featureManager>
 
-    <httpEndpoint host="*" httpPort="9081" httpsPort="9444" id="defaultHttpEndpoint"/>
+    <!-- http disabled -->
+    <httpEndpoint host="*" httpPort="-1" httpsPort="9447" id="defaultHttpEndpoint"/>
 
     <keyStore id="defaultKeyStore" password="testOnlyKeystore"/>
+	<quickStartSecurity userName="admin" userPassword="adminPassword"/>
 
     <!-- This one will become db based per room provider -->
     <jndiEntry jndiName="registrationSecret" value="${env.REGISTRATION_SECRET}"/>
@@ -23,7 +26,7 @@
 
     <logging traceSpecification="*=info"/>
 
-    <applicationMonitor dropinsEnabled="false"/>
+    <applicationMonitor dropinsEnabled="false" updateTrigger="mbean"/>
 
-    <webApplication contextRoot="/map" id="map-app" location="map-app.war"/>
+    <webApplication id="map-app" location="map-app.war" name="map-app"/>
 </server>
