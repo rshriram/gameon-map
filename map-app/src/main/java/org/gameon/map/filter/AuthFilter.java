@@ -13,10 +13,11 @@ import java.time.Instant;
 import java.time.format.DateTimeParseException;
 import java.util.Arrays;
 import java.util.Base64;
-import java.util.Collections;
-import java.util.HashMap;
 import java.util.List;
-import java.util.Map;
+import java.util.Map.Entry;
+import java.util.UUID;
+import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.ConcurrentMap;
 import java.util.concurrent.TimeUnit;
 import java.util.stream.Collectors;
 
@@ -43,7 +44,15 @@ import javax.servlet.http.HttpServletResponse;
           )
 public class AuthFilter implements Filter {
 
-    private Map<String,TimestampedKey> apiKeyForId = Collections.synchronizedMap( new HashMap<String,TimestampedKey>() );
+    private static final long EXPIRES_REQUEST_MS = 5000;                            //expiry time for requests in ms
+    private static final long EXPIRES_PLAYERID_MS = TimeUnit.DAYS.toMillis(1);      //expiry time for player ID before checking for revocation (in ms)
+    private static final long EXPIRES_REPLAY_MS = EXPIRES_REQUEST_MS + 1000;        //how long to retain replays for, must be longer than the valid request period
+    private static ConcurrentMap<String,TimestampedKey> apiKeyForId = new ConcurrentHashMap<>();
+    private static final String instanceID = UUID.randomUUID().toString();
+    public static final String INSTANCE_ID = "gameon-instanceID";
+    private static final boolean instanceCheckingEnabled = false;                   //remove this to enforce map instance checking to counter replays
+    //this map contains all the received messages, it is thread safe
+    private static ConcurrentMap<String,TimestampedKey> requests = new ConcurrentHashMap<>();
     
     /** CDI injection of client for Player CRUD operations */
     @Inject
@@ -54,6 +63,7 @@ public class AuthFilter implements Filter {
     
     @Override
     public void init(FilterConfig filterConfig) throws ServletException {
+        filterConfig.getServletContext().setAttribute(INSTANCE_ID, instanceID);
     }
     
     /**
@@ -85,6 +95,10 @@ public class AuthFilter implements Filter {
         public String getSignature(){
             return req.getHeader("gameon-signature");
         }
+        public String getMapID() {
+            return req.getHeader(INSTANCE_ID);
+        }
+        
         public String getBody(){
             return body;
         }
@@ -133,49 +147,6 @@ public class AuthFilter implements Filter {
     }
     
     /**
-     * Timestamped Key
-     * Equality / Hashcode is determined by key string alone.
-     * Sort order is provided by key timestamp.
-     */
-    private final static class TimestampedKey implements Comparable<TimestampedKey> {
-        private final String apiKey;
-        private final Long time;
-        public TimestampedKey(String a){
-            this.apiKey=a; this.time=System.currentTimeMillis();
-        }
-        public TimestampedKey(String a,Long t){
-            this.apiKey=a; this.time=t;
-        }
-        @Override
-        public int compareTo(TimestampedKey o) {
-            return o.time.compareTo(time);
-        }
-        @Override
-        public int hashCode() {
-            final int prime = 31;
-            int result = 1;
-            result = prime * result + ((apiKey == null) ? 0 : apiKey.hashCode());
-            return result;
-        }
-        @Override
-        public boolean equals(Object obj) {
-            if (this == obj)
-                return true;
-            if (obj == null)
-                return false;
-            if (getClass() != obj.getClass())
-                return false;
-            TimestampedKey other = (TimestampedKey) obj;
-            if (apiKey == null) {
-                if (other.apiKey != null)
-                    return false;
-            } else if (!apiKey.equals(other.apiKey))
-                return false;
-            return true;
-        }
-    }
-    
-    /**
      * Obtain the apiKey for the given id, using a local cache to avoid hitting couchdb too much.
      */
     private String getKeyForId(String id){
@@ -184,44 +155,56 @@ public class AuthFilter implements Filter {
             return registrationSecret;
         }
         
-        String key = null;
-        //check cache for this id.
-        TimestampedKey t = apiKeyForId.get(id);
-        if(t!=null){
-            //cache hit, but is the key still valid?
-            long current = System.currentTimeMillis();
-            current -= t.time;          
-            //if the key is older than this time period.. we'll consider it dead.
-            boolean valid = current < TimeUnit.DAYS.toMillis(1);    
-            if(valid){                          
-                //key is good.. we'll use it.
+        TimestampedKey t = new TimestampedKey(EXPIRES_PLAYERID_MS);
+        TimestampedKey result =  apiKeyForId.putIfAbsent(id, t);    //check cache for this id.
+        if(result != null) {
+            //the id has been seen, so check to see if it has expired
+            if(!result.hasExpired()) {
                 System.out.println("Map using cached key for "+id);
-                key = t.apiKey;
-            }else{
-                //key has expired.. forget it.
-                System.out.println("Map expired cached key for "+id);
-                apiKeyForId.remove(id);
-                t=null;
+                return result.getKey();                
+            }
+            System.out.println("Map expired cached key for "+id);
+            apiKeyForId.replace(id, t); //replace old entry with new one to be initialised
+        }
+        System.out.println("Map asking player service for key for id "+id);
+        try {
+            String key = playerClient.getApiKey(id);
+            t.setKey(key);
+            return key;
+        } catch (Exception e) {
+            System.out.println("Map unable to get key for id "+id);
+            e.printStackTrace();
+            return null;
+        }
+    }
+    
+    
+    //checks to see if the HMAC has previously been processed by the server
+    private boolean isDuplicate(String hmac) {
+        if(requests.size() > 1000) {
+            System.out.println("Clearing down expired messages");
+            long count = 0;
+            /*
+             * This will do for the moment, however it will still be possible the multiple 
+             * requests are doing a clean up at the same time. However the use of ConcurrentMaps
+             * and weakly consistent iterators means that ConcurrentModificationExceptions will not occur
+             * (it just isn't very efficient at the moment).
+             */
+            for(Entry<String, TimestampedKey> request : requests.entrySet()) {
+                if(request.getValue().hasExpired()) {
+                    //safe as concurrent maps don't throw concurrent modification exceptions
+                    requests.remove(request.getKey());
+                    count++;
+                }
+            }
+            if(count > 0) {
+                System.out.println("Cleared down " + count + "messages");
+            } else {
+                System.out.println("No messages were cleared down");
             }
         }
-        if(t == null){
-            //key was not in cache, or was expired..
-            //go obtain the apiKey via player Rest endpoint.
-            try{
-                System.out.println("Map asking player service for key for id "+id);
-                key = playerClient.getApiKey(id);
-            }catch(Exception e){
-                System.out.println("Map unable to get key for id "+id);
-                e.printStackTrace();
-                key=null;
-            }           
-            //got a key ? add it to the cache.
-            if(key!=null){
-                t = new TimestampedKey(key);
-                apiKeyForId.put(id, t);
-            }
-        }
-        return key;
+        TimestampedKey t = new TimestampedKey(hmac, EXPIRES_REPLAY_MS);
+        return requests.putIfAbsent(hmac, t) != null;
     }
 
     @Override
@@ -235,8 +218,8 @@ public class AuthFilter implements Filter {
             
             System.out.println("Evaluating uri of "+requestUri);
             
-            if(requestUri.startsWith("/map/v1/health")){
-                System.out.println("No auth needed for health");
+            if(requestUri.startsWith("/map/v1/health") || requestUri.startsWith("/map/v1/app")) {
+                System.out.println("No auth needed for health or app info");
                 //no auth needed for health.
                 chain.doFilter(request, response);
                 return;
@@ -250,7 +233,8 @@ public class AuthFilter implements Filter {
                 String id = saw.getId();
                 if ( id == null )
                     id = "game-on.org";
-                String gameonDate = saw.getDate();                
+                String gameonDate = saw.getDate();    
+                String mapID = saw.getMapID();
                 try{
                     //we protect Map, and our requirements vary per http method
                     switch(httpRequest.getMethod()){
@@ -259,26 +243,26 @@ public class AuthFilter implements Filter {
                             if(saw.getId() == null){
                                 id = null;
                             }else{
-                                if(!validateHeaderBasedAuth(response, saw, id, gameonDate, false)){
+                                if(!validateHeaderBasedAuth(response, saw, id, gameonDate, false, mapID)){
                                     return;
                                 }
                             }
                             break;
                         }
                         case "POST":{
-                            if(!validateHeaderBasedAuth(response, saw, id, gameonDate, true)){
+                            if(!validateHeaderBasedAuth(response, saw, id, gameonDate, true, mapID)) {
                                 return;
                             }
                             break;
                         }
                         case "DELETE":{
-                            if(!validateHeaderBasedAuth(response, saw, id, gameonDate, false)){
+                            if(!validateHeaderBasedAuth(response, saw, id, gameonDate, false, mapID)) {
                                 return;
                             }
                             return;
                         }
                         case "PUT":{
-                            if(!validateHeaderBasedAuth(response, saw, id, gameonDate, true)){
+                            if(!validateHeaderBasedAuth(response, saw, id, gameonDate, true, mapID)){
                                 return;
                             }
                             return;
@@ -301,14 +285,31 @@ public class AuthFilter implements Filter {
                 chain.doFilter(saw, response);
                 return;
             }          
-            ((HttpServletResponse)response).sendError(HttpServletResponse.SC_FORBIDDEN, "Request made to unknown url pattern. "+httpRequest.getRequestURI());         
+            ((HttpServletResponse)response).sendError(HttpServletResponse.SC_FORBIDDEN, "Request made to unknown url pattern. "+httpRequest.getRequestURI());
         }else{
             ((HttpServletResponse)response).sendError(HttpServletResponse.SC_INTERNAL_SERVER_ERROR, "Only supports http servlet requests");
         }
     }
 
-    private boolean validateHeaderBasedAuth(ServletResponse response, ServletAuthWrapper saw, String id, String gameonDate, boolean postData)
-            throws NoSuchAlgorithmException, UnsupportedEncodingException, InvalidKeyException, IOException {        
+    private boolean validateHeaderBasedAuth(ServletResponse response, ServletAuthWrapper saw, String id, String gameonDate, boolean postData, String mapID)
+            throws NoSuchAlgorithmException, UnsupportedEncodingException, InvalidKeyException, IOException {       
+        String hmacHeader = saw.getSignature();
+        if((hmacHeader == null) || (hmacHeader.length() == 0)) {
+            ((HttpServletResponse)response).sendError(HttpServletResponse.SC_FORBIDDEN,"Invalid signature received");
+            return false;
+        } 
+        if(isDuplicate(hmacHeader)) {
+            ((HttpServletResponse)response).sendError(HttpServletResponse.SC_FORBIDDEN,"Duplicate request received");
+            return false;
+        }
+        if(instanceCheckingEnabled) {
+            mapID = "";     //checking is disabled, so remove mapID
+        } else {
+            if(!instanceID.equals(mapID)) {
+                ((HttpServletResponse)response).sendError(HttpServletResponse.SC_FORBIDDEN,"Invalid map instance ID supplied in header");
+                return false;
+            }
+        }
         String secret = getKeyForId(id);  
         if(secret == null){            
             ((HttpServletResponse)response).sendError(HttpServletResponse.SC_FORBIDDEN,"Unable to obtain shared secret for player "+id+" from player service");
@@ -319,21 +320,17 @@ public class AuthFilter implements Filter {
         String bodyHashHeader = postData ? saw.getSigBody() : "";
         if(bodyHash!=null && bodyHash.equals(bodyHashHeader)){
             String hmac = buildHmac(Arrays.asList(
-                    new String[] { id,gameonDate,bodyHashHeader} ), secret);
-            String hmacHeader = saw.getSignature();
+                    new String[] { mapID, id,gameonDate,bodyHashHeader} ), secret);
+            
             if(hmac!=null && hmac.equals(hmacHeader)){
                 Instant now = Instant.now();
                 Instant then = Instant.parse(gameonDate);    
                 try{
-                if(Duration.between(now,then).toMillis() > 5000){
+                if(Duration.between(now,then).toMillis() > EXPIRES_REQUEST_MS) {
                     //fail.. time delta too much.
                     ((HttpServletResponse)response).sendError(HttpServletResponse.SC_FORBIDDEN,"Time delta of "+Duration.between(now,then).toMillis()+"ms is too great.");
                     return false;
                 }else{                    
-                    //TODO: add replay check.. 
-                    
-                    //otherwise.. we're done here.. auth is good, we'll come out the switch
-                    //and pass control to the original method.
                     return true;
                 }
                 }catch(DateTimeParseException e){

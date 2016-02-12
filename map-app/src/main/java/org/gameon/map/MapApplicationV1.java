@@ -19,6 +19,7 @@ import javax.ws.rs.ApplicationPath;
 import javax.ws.rs.core.Application;
 
 @ApplicationPath("/v1")
+
 @io.swagger.annotations.SwaggerDefinition(
         info = @io.swagger.annotations.Info(
                     title = "Game On! Map API",
@@ -30,4 +31,5 @@ public class MapApplicationV1 extends Application {
      * @ApplicationPath will tuck the entirety of the REST endpoint under v1: /map/v1/
      * Any {@link Path} annotations at the class level are appended onto that, etc.
      */
+    
 }
