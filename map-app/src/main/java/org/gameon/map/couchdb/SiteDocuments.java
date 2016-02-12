@@ -84,35 +84,28 @@ public class SiteDocuments {
     public List<JsonNode> listSites(String owner, String name) {
 
         List<JsonNode> sites = Collections.emptyList();
+        ViewQuery query = viewQueryForOwnerAndName(owner, name);
+        sites = db.queryView(query, JsonNode.class);
 
-        if ( owner != null && name != null ) {
-            ViewQuery owner_name = new ViewQuery().designDocId(DESIGN_DOC).viewName("owner_name")
-                    .includeDocs(true)
-                    .key(ComplexKey.of(owner, name));
-
-            sites = db.queryView(owner_name, JsonNode.class);
-        } else if ( owner != null ) {
-            ViewQuery owner_name = new ViewQuery().designDocId(DESIGN_DOC).viewName("owner_name")
-                    .includeDocs(true)
-                    .startKey(owner)
-                    .endKey(ComplexKey.of(owner, ComplexKey.emptyObject()));
-
-            sites = db.queryView(owner_name, JsonNode.class);
-        } else if ( name != null ) {
-            ViewQuery name_only = new ViewQuery().designDocId(DESIGN_DOC).viewName("name")
-                    .includeDocs(true)
-                    .startKey(name)
-                    .endKey(ComplexKey.of(name, ComplexKey.emptyObject()));
-
-            sites = db.queryView(name_only, JsonNode.class);
-        } else {
-            sites = db.queryView(all, JsonNode.class);
-        }
-
-        if ( sites == null )
+        if (sites == null)
             return Collections.emptyList();
 
         return sites;
+    }
+
+    private ViewQuery viewQueryForOwnerAndName(String owner, String name) {
+        if (owner != null && name != null) {
+            return new ViewQuery().designDocId(DESIGN_DOC).viewName("owner_name").includeDocs(true)
+                    .key(ComplexKey.of(owner, name));
+        } else if (owner != null) {
+            return new ViewQuery().designDocId(DESIGN_DOC).viewName("owner_name").includeDocs(true).startKey(owner)
+                    .endKey(ComplexKey.of(owner, ComplexKey.emptyObject()));
+        } else if (name != null) {
+            return new ViewQuery().designDocId(DESIGN_DOC).viewName("name").includeDocs(true).startKey(name)
+                    .endKey(ComplexKey.of(name, ComplexKey.emptyObject()));
+        } else {
+            return all;
+        }
     }
 
 
