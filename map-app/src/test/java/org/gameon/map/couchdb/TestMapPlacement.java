@@ -42,7 +42,7 @@ import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectWriter;
 
-@Ignore
+//@Ignore
 public class TestMapPlacement {
 
     protected static CouchDbInstance db;
@@ -52,7 +52,7 @@ public class TestMapPlacement {
     @BeforeClass
     public static void beforeClass() throws MalformedURLException {
         HttpClient httpClient = new StdHttpClient.Builder()
-                .url("http://192.168.99.100:5984/")
+                .url("http://127.0.0.1:5984/")
                 .username("mapUser")
                 .password("myCouchDBSecret")
                 .build();
@@ -79,6 +79,11 @@ public class TestMapPlacement {
 
         // TODO: more things to tweak summary response
     }
+    
+    @Test
+    public void testRoomsForDifferentOwners() {
+        
+    }
 
     @Test
     public void testCreateUpdateRoom() throws JsonProcessingException {
@@ -94,10 +99,15 @@ public class TestMapPlacement {
         details.setTarget("test-socket");
         details.setType("test");
         info.setConnectionDetails(details);
-
+        List<JsonNode> sites = repo.listSites(null, null);
+        System.out.println("All sites:");
+        debugWriter.writeValueAsString(sites);
+        System.out.println("End All sites:");
         // "connect" or place the new room into the map
         Site result = repo.connectRoom("test", info);
+        System.out.println("***Full String is:");
         String fullString = debugWriter.writeValueAsString(result);
+        System.out.println("***Full String end");
 
         // Make sure we get stuff for all of the exits back, and that the owner is not null
         Assert.assertNotNull("North exit should be described: " + fullString, result.getExits().getN());
