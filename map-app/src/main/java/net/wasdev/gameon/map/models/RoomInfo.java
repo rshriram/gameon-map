@@ -40,6 +40,9 @@ public class RoomInfo {
 
     /** Optional door descriptions */
     private Doors doors;
+    
+    /** Optional token supplied by the room which it may subsequently use to validate connections or API invocations */
+    private String token;
 
     @ApiModelProperty(
             value = "Short/Terse name of the target room, must be unique within the owner's rooms",
@@ -80,6 +83,17 @@ public class RoomInfo {
     }
     public void setDescription(String description) {
         this.description = description;
+    }
+    
+    @ApiModelProperty(
+            value = "A unique token that is associated with this room",
+            example = "A typical token would be a UUID such as ff305a23-75b4-431b-addd2-eb6b9e546467324.",
+            required = false)
+    public String getToken() {
+        return token;
+    }
+    public void setToken(String token) {
+        this.token = token;
     }
 
     @ApiModelProperty(
