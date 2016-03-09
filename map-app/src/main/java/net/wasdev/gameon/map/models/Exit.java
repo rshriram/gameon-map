@@ -42,6 +42,9 @@ public class Exit {
 
     /** target room connection details */
     private ConnectionDetails connDetails = null;
+    
+    /** Any auth token provided during registration */
+    private String token;
 
     public Exit() {}
 
@@ -52,6 +55,7 @@ public class Exit {
             this.name = targetSite.getInfo().getName();
             this.fullName = targetSite.getInfo().getFullName();
             this.connDetails = targetSite.getInfo().getConnectionDetails();
+            this.token = targetSite.getInfo().getToken();
 
             setDoorNameFromTargetSite(targetSite, direction);
 
@@ -166,5 +170,15 @@ public class Exit {
       sb.append("  connDetails: ").append(connDetails).append("\n");
       sb.append("}\n");
       return sb.toString();
+    }
+    
+    @ApiModelProperty(
+            required = false)
+    public String getToken() {
+        return token;
+    }
+    
+    public void setToken(String token) {
+        this.token = token;
     }
 }
